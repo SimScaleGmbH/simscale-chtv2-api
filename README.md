@@ -17,6 +17,6 @@ This code should serve the purpose of showing: (All the functions can be found i
 11. Run the simulation 
 12. Download results 
 
-To use the code, you need to have a SimScale API key - you can receive one after contacting the SimScale team.
+To use the code, you need to have a SimScale API key
 
 
