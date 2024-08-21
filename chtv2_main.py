@@ -17,7 +17,7 @@ cht = util.ConjugateHeatTransfer()
 cht.set_api_connection()
 
 """Create Project"""
-cht.create_project( name = "CoolingPlate_CHTv2-API",
+cht.create_or_find_project( name = "CoolingPlate_CHTv2-API",
                    description = "Running the cooling plate example using an automated workflow via the API")
 
 """Upload Geometry"""
@@ -82,7 +82,7 @@ cht.set_simulation_control()
 #-----------------------------
 #Define Result Controls 
 cht.set_area_averages(name = 'inlet-outlet', write_interval = 10,
-                      key_list = ["inlet", 'outlet'])
+                      key_list_single = ["inlet", 'outlet'])
 
 cht.set_area_volumes(name = 'inlet-outlet_vol', write_interval = 10,
                      key_list = ["inlet", 'outlet'])
@@ -95,16 +95,16 @@ cht.set_simulation_spec( simulation_name = "chtv2_api")
 #-----------------------------
 
 #Update the spec with the materials 
-cht.add_fluid_material(fluid_name = 'Water'  , key_list = ['flow_volume'])
-cht.add_solid_material(solid_name = 'Aluminium', key_list = ['tool_body'])
+cht.add_fluid_material(fluid_name = 'Water'  , key_list_single = ['flow_volume'])
+cht.add_solid_material(solid_name = 'Aluminium', key_list_single = ['tool_body'])
 
 #-----------------------------    
 #Mesh settings
 cht.set_mesh_layer_settings(num_of_layers = 3, total_rel_thickness = 0.4, growth_rate = 1.5)
 cht.set_advanced_mesh_settings(small_feature_tolerance = 5E-5, gap_ref_factor = 0.05, gradation_rate = 1.22)
-cht.set_local_element_size_refinement(max_element_size= 0.001, name = 'testref', key_list = ['battery_load'])
+cht.set_local_element_size_refinement(max_element_size= 0.001, name = 'testref', key_list_single = ['battery_load'])
 cht.set_mesh_region_refinement(max_element_size= 0.002, name = "region", key_list= ['tool_body'], geo_primitive_ids= [box_uuid])
-cht.complete_mesh_settings(mesh_name = "Mesh_test", fineness = 0.1, physics_based_meshing = True)
+cht.create_auto_sizing_mesh(mesh_name = "Mesh_test", fineness = 0.1, physics_based_meshing = True)
 cht.estimate_mesh_operation()
 cht.start_meshing_operation(run_state = False)
 
@@ -184,7 +184,6 @@ cht.start_simulation_run(wait_for_results = False)
 # cht.get_simulation_results()
 # cht.get_probe_point_results(name = "test_probe", field = 'T')
 # cht.get_probe_point_results(name = "multi_test_probe", field = 'T')
-# cht.get_surface_data_results(data_type = 'average', name = 'inlet-outlet', field = "T")
-# cht.get_surface_data_results(data_type = 'average', name = 'inlet-outlet', field = "p")
-# cht.get_surface_data_results(data_type = 'integral', name = 'inlet-outlet_vol', field = "Uy")
+# cht.get_surface_data_results(data_type = 'average', rs_name = 'inlet', prefix = "mod" , field = "p")
+# cht.get_surface_data_results(data_type = 'average', rs_name = 'outlet', prefix = "mod" ,field = "T")
 # cht.get_simulation_case_files()
