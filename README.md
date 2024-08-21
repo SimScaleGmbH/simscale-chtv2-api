@@ -19,4 +19,5 @@ This code should serve the purpose of showing: (All the functions can be found i
 
 To use the code, you need to have a SimScale API key
 
-
+Note: When running a CHTv2 simulation via the API, defining contacts is not required. 
+In CHTv2.0 the addition of contacts is not necessary for the heat transfer through the interfaces. The relationship in those interfaces is automatically detected by the meshing algorithm and defined as a coupled interface (perfect heat transfer across the interface - behind the scenes). Meaning those interfaces between the solid and the flow volume are accounted for and heat transfer is expected to occur out of the box.
