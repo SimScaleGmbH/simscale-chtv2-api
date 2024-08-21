@@ -45,12 +45,12 @@ class ConjugateHeatTransfer():
     def __init__(self): 
         
         #API Variables
-        self.api_key        = ""
-        self.api_url        = ""
+        self.api_key        = "" #REMOVE WHEN NOT USING DEV, LEAVE EMPTY STRINGS
+        self.api_url        = "" #REMOVE WHEN NOT USING DEV, LEAVE EMPTY STRINGS
         self.api_key_header = "X-API-KEY"
         self.version        = "/v0"
-        self.host           = ""
-        self.server         = "prod"
+        self.host           = "" #REMOVE WHEN NOT USING DEV, LEAVE EMPTY STRINGS
+        self.server         = "prod" #dev prod
         
         #Client Variables
         self.api_client  = None
@@ -73,6 +73,7 @@ class ConjugateHeatTransfer():
         self.geometry_name = ""
         self.geometry_id   = ""
         self.geometry_path = ""
+        self.geometry_id_list = []
         
         #Geometry Mapping 
         self.single_entity     = {} #for later: separate the faces from volumes and add a validation rule against duplicate assignments for the same entity (materials)
@@ -133,19 +134,22 @@ class ConjugateHeatTransfer():
         #Mesh Variables
         self.mesh_operation = None 
         self.mesh_operation_id = None
+        self.mesh_operation_id_list = []
         self.automatic_layer_settings = None
         self.advanced_mesh_settings = None
         self.mesh_refinement = [] 
         self.mesh_id = None
         self.mesh_max_runtime = None
+        self.few_mesh_ids = None
 
         #Simulation Creation Variables
         self.model = None 
         self.sim_max_run_time = None
         self.simulation_spec = None
-        self.simulation_id   = None
+        self.simulation_id   = ""
         self.simulation_run  = None 
         self.run_id = None
+        self.few_simulation_specs = None
         
         #Simulation Results Download Variables 
         self.simulation_results = None 
@@ -176,6 +180,9 @@ class ConjugateHeatTransfer():
             self.api_key = os.getenv('SIMSCALE_API_KEY')
             self.api_url = os.getenv('SIMSCALE_API_URL')
             self.host = self.api_url + self.version
+            print(self.api_url)
+            print("*"*8)
+            print(self.host)
         except:
             raise Exception("Cannot get Keys from Environment Variables")
         
@@ -252,9 +259,10 @@ class ConjugateHeatTransfer():
         self.reports_api = sim_sdk.ReportsApi(self.api_client) 
         self.wind_api = sim_sdk.WindApi(self.api_client)
         
-    def create_project(self, name, description, measurement_system = "SI"):
+    def create_or_find_project(self, name, description, measurement_system = "SI"):
         '''
-        Take a name and description and create a new workbench project
+        Take a name and description and create a new workbench project,
+        The code will first look if that project already exists.
 
         Parameters
         ----------
@@ -407,7 +415,7 @@ class ConjugateHeatTransfer():
                 location=sim_sdk.GeometryImportRequestLocation(self.storage_id),
                 format=_format,
                 input_unit=units,
-                options=sim_sdk.GeometryImportRequestOptions(facet_split= False, sewing=False, improve=True,
+                options=sim_sdk.GeometryImportRequestOptions(facet_split= False, sewing=False, improve=False,
                                                          optimize_for_lbm_solver=False),
             )
     
@@ -452,13 +460,15 @@ class ConjugateHeatTransfer():
         '''        
         entity = self.geometry_api.get_geometry_mappings(project_id, geometry_id, **kwargs)._embedded
         if len(entity) == 1:
-            # print(entity[0].name)
+            print(entity[0].name)
             self.single_entity[key] = entity[0].name
             return self.single_entity[key]
         else:
             raise Exception(f"Found {len(self.single_entity[key])} entities instead of 1: {self.single_entity[key]}")
 
-    def get_entity_names(self, project_id, geometry_id, key, number = None ,**kwargs):
+    def get_entity_names(self, project_id, geometry_id, key ,number = None , limit = 1000 ,**kwargs):
+        
+        # add code to allow for pagination
         
         '''
         Retrieve multiple entity IDs of faces/parts. Assume you have multiple parts 
@@ -486,15 +496,35 @@ class ConjugateHeatTransfer():
         None.
     
         '''                
-        entities = self.geometry_api.get_geometry_mappings(project_id, geometry_id, **kwargs)._embedded
+        entities = self.geometry_api.get_geometry_mappings(project_id, geometry_id, limit = limit ,**kwargs)._embedded
     
         if number is None or len(entities) == number:
-            # print(len(entities))
-            self.multiple_entities[key] = entities[0].name
-            return [self.multiple_entities[key] for e in entities]
+            print(len(entities))
+            # self.multiple_entities[key] = entities[0].name
+            self.multiple_entities[key] = [e.name for e in entities]
+            return self.multiple_entities[key]
         else:
-            raise Exception(f"Found {len(self.multiple_entities[key])} entities instead of {number}: {self.multiple_entities[key]}")
-    
+            raise Exception(f"Found {len(entities)} entities instead of {number}: {entities}")
+
+    def get_entity_ids(self, entity_dict, entity_type='volume', use_single_method=True):
+        """
+        Get the entity IDs associated with CAD parts or predefined surfaces.
+
+        :param entity_dict: A dictionary that maps entity names to their values.
+        :param entity_type: Type of the entity, either 'volume' or 'face'.
+        :param use_single_method: True to use get_single_entity_name, False to use get_entity_names.
+        """
+        
+        method_name = "get_single_entity_name" if use_single_method else "get_entity_names"
+        for key, value in entity_dict.items():
+            if entity_type == 'volume':
+                getattr(self, method_name)(self.project_id, self.geometry_id, key=key, attributes=["SDL/TYSA_NAME"], values=[value])
+            elif entity_type == 'face':
+                getattr(self, method_name)(self.project_id, self.geometry_id, key=key, _class='face', attributes=["SDL/TYSA_NAME"], values=[value])
+            else:
+                raise ValueError("Invalid entity_type. Use 'volume' or 'face'.")
+
+
     """Functions to define the global and initial settings of the simulation"""
 
     def set_compressible(self, state = False):
@@ -588,7 +618,7 @@ class ConjugateHeatTransfer():
         self.fluid_model_gravity = sim_sdk.FluidModel(
                 gravity=sim_sdk.DimensionalVectorAcceleration(
                     value=sim_sdk.DecimalVector(x= g_x, y= g_y, z= g_z),
-                    unit="m"))
+                    unit="m/s²"))
 
             
     def _set_initial_conditions(self, p  = 0 , ux = 0 , uy = 0, uz = 0, t = 19.85, k = 0.00375, omega = 3.375):
@@ -667,7 +697,7 @@ class ConjugateHeatTransfer():
         
     """Functions to set materials for the simulations by retrieving them from the material library"""
 
-    def add_fluid_material(self, fluid_name = '' ,key_list = []):
+    def add_fluid_material(self, fluid_name = '', fluid_number = 0 ,key_list_single = [], key_multi_entity = None, single_entities = True):
 
         '''
         Add a fluid material to the simulation by retrieving it from the 
@@ -695,9 +725,12 @@ class ConjugateHeatTransfer():
         None.
     
         '''            
-        bodies_to_assign = []
-        for key in key_list: 
-            bodies_to_assign.append(self.single_entity[key])
+        if single_entities: 
+            bodies_to_assign = []
+            for key in key_list_single: 
+                bodies_to_assign.append(self.single_entity[key])
+        else: 
+            bodies_to_assign = self.multiple_entities[key_multi_entity]
             
         material_groups = self.materials_api.get_material_groups().embedded
         default_material_group = next((group for group in material_groups if group.group_type == MaterialGroupType.SIMSCALE_DEFAULT), None)
@@ -729,10 +762,10 @@ class ConjugateHeatTransfer():
         
         # Add assignments to the new material
         self.simulation_spec = self.simulation_api.get_simulation(self.project_id, self.simulation_id)
-        self.simulation_spec.model.materials.fluids[0].topological_reference = sim_sdk.TopologicalReference(entities= bodies_to_assign)
+        self.simulation_spec.model.materials.fluids[fluid_number].topological_reference = sim_sdk.TopologicalReference(entities= bodies_to_assign)
         self.simulation_api.update_simulation(self.project_id, self.simulation_id, self.simulation_spec)
             
-    def add_solid_material(self, solid_name = '' ,key_list = []):
+    def add_solid_material(self, solid_name = '' ,solid_number = 0 ,key_list_single = [], key_multi_entity = None, single_entities = True):
         
         '''
         Add a solid material to the simulation by retrieving it from the 
@@ -760,9 +793,13 @@ class ConjugateHeatTransfer():
         None.
     
         ''' 
-        bodies_to_assign = []
-        for key in key_list: 
-            bodies_to_assign.append(self.single_entity[key])
+                 
+        if single_entities: 
+            bodies_to_assign = []
+            for key in key_list_single: 
+                bodies_to_assign.append(self.single_entity[key])
+        else: 
+            bodies_to_assign = self.multiple_entities[key_multi_entity]
             
         material_groups = self.materials_api.get_material_groups().embedded
         default_material_group = next((group for group in material_groups if group.group_type == MaterialGroupType.SIMSCALE_DEFAULT), None)
@@ -795,7 +832,7 @@ class ConjugateHeatTransfer():
         
         # Add assignments to the new material
         self.simulation_spec = self.simulation_api.get_simulation(self.project_id, self.simulation_id)
-        self.simulation_spec.model.materials.solids[0].topological_reference = sim_sdk.TopologicalReference(entities= bodies_to_assign)
+        self.simulation_spec.model.materials.solids[solid_number].topological_reference = sim_sdk.TopologicalReference(entities= bodies_to_assign)
         self.simulation_api.update_simulation(self.project_id, self.simulation_id, self.simulation_spec)
         
     """Function to define simulation numerics"""
@@ -1849,7 +1886,7 @@ class ConjugateHeatTransfer():
 
     """Functions to define simulation control settings of the simulation"""
 
-    def set_simulation_end_time(self, time = 1000):
+    def set_simulation_end_time(self, time = 1 ):
         
         '''
         define the end time of the simulation - this is steady state so the 
@@ -1871,7 +1908,7 @@ class ConjugateHeatTransfer():
         '''             
         self.end_time = sim_sdk.DimensionalTime(value= time, unit="s")
         
-    def set_simulation_time_step(self, time_step = 1): 
+    def set_simulation_time_step(self, time_step = 1000): 
         
         '''
         define the timestep of the simulation - this is steady state so the 
@@ -1959,10 +1996,12 @@ class ConjugateHeatTransfer():
                 write_control= self.write_control,
                 max_run_time= self.max_run_time,
                 decompose_algorithm=sim_sdk.ScotchDecomposeAlgorithm(),)
+        
+    
     
     """Functions to define additional result export"""
     
-    def set_area_averages(self, name = "Area average", write_interval = 10, key_list = []):
+    def set_area_averages(self, name = "Area average", write_interval = 10, key_list_single = [], key_multi_entity = None,single_entities = True):
         
         '''
         set an area average on a face. useful to monitor convergence of a simulation  
@@ -1993,9 +2032,12 @@ class ConjugateHeatTransfer():
             
         '''   
          
-        faces_to_assign = []
-        for key in key_list: 
-            faces_to_assign.append(self.single_entity[key])
+        if single_entities: 
+            faces_to_assign = []
+            for key in key_list_single: 
+                faces_to_assign.append(self.single_entity[key])
+        else: 
+            faces_to_assign = self.multiple_entities[key_multi_entity]
 
         self.surface_data.append(
             sim_sdk.AreaAverageResultControl(
@@ -2202,6 +2244,20 @@ class ConjugateHeatTransfer():
         
         print(f"simulation_id: {self.simulation_id}")
         
+    def set_simulation_spec_from_existing_model(self, simulation_name):
+        
+        self.simulation_spec = sim_sdk.SimulationSpec(name= simulation_name, 
+                                                      geometry_id= self.geometry_id,
+                                                      model= self.model)
+        
+        self.simulation_id = self.simulation_api.create_simulation(self.project_id, 
+                                                                   self.simulation_spec).simulation_id
+        
+        self.simulation_spec.simulation_id = self.simulation_id
+        
+        print(f"simulation_id: {self.simulation_id}")
+                
+        
     def reset_simulation_spec_components(self):
         
         '''
@@ -2238,7 +2294,17 @@ class ConjugateHeatTransfer():
         
     """Functions to define mesh settings"""
     
-    def set_mesh_layer_settings(self, num_of_layers = 3, total_rel_thickness = 0.4, growth_rate = 1.5):
+    
+    def create_simulation_from_existing_spec(self, new_sim_name): 
+        
+        
+        self.simulation_spec.name = new_sim_name
+        
+        self.simulation_id = self.simulation_api.create_simulation(self.project_id, 
+                                                                   self.simulation_spec).simulation_id
+        
+    
+    def set_mesh_layer_settings(self, active = True ,num_of_layers = 3, total_rel_thickness = 0.4, growth_rate = 1.5):
         
         '''
         define the mesh boundary layer settings         
@@ -2263,13 +2329,21 @@ class ConjugateHeatTransfer():
         None. 
         
         '''           
-        self.automatic_layer_settings = sim_sdk.AutomaticLayerOn(type="AUTOMATIC_LAYER_ON",
-                                                                  		number_of_layers= num_of_layers,
-                                                                  		total_relative_thickness= total_rel_thickness,
-                                                                  		layer_type= sim_sdk.FractionalHeight2(
-                                                                  			type="FRACTIONAL_HEIGHT_2",
-                                                                  			growth_rate= growth_rate,)
-                                                                          )
+        
+        if active: 
+            self.automatic_layer_settings = sim_sdk.AutomaticLayerOn(type="AUTOMATIC_LAYER_ON",
+                                                                      		number_of_layers= num_of_layers,
+                                                                      		total_relative_thickness= total_rel_thickness,
+                                                                      		layer_type= sim_sdk.FractionalHeight2(
+                                                                      			type="FRACTIONAL_HEIGHT_2",
+                                                                      			growth_rate= growth_rate,)
+                                                                              )
+            
+        else:
+            self.automatic_layer_settings = sim_sdk.AutomaticLayerOff()
+        
+        
+        
         
     def set_advanced_mesh_settings(self, small_feature_tolerance = 5E-5, gap_ref_factor = 0.05, gradation_rate = 1.22): 
         
@@ -2304,7 +2378,7 @@ class ConjugateHeatTransfer():
                                     gap_elements = gap_ref_factor, global_gradation_rate = gradation_rate)
     
     
-    def complete_mesh_settings(self, mesh_name ,fineness = 5, physics_based_meshing = True):
+    def create_auto_sizing_mesh(self, mesh_name ,fineness = 5, physics_based_meshing = True):
         
         '''
         combine the mesh settings in one place and define the global mesh fineness  
@@ -2355,7 +2429,72 @@ class ConjugateHeatTransfer():
         self.mesh_operation_id = self.mesh_operation.mesh_operation_id
         self.mesh_operation_api.update_mesh_operation( self.project_id, self.mesh_operation_id, self.mesh_operation)
 
-    def set_local_element_size_refinement(self, max_element_size ,name = '',  key_list = []):
+    def create_manual_sizing_mesh(self, mesh_name ,max_edge_len, min_edge_len, physics_based_meshing = True):
+        
+        '''
+        combine the mesh settings in one place and define the global mesh fineness  
+        
+        Parameters
+        ----------
+        
+        mesh_name: str
+            
+            the name of the mesh being submitted 
+            
+        max_edge_len: float  
+        
+            Maximum edge length of the elements in the mesh
+        
+        min_edge_len: float
+        
+            Minimum edge length of the elements in the mesh
+            
+            
+        physics_based_meshing: boolean 
+        
+            when enabled, builds the mesh taking into account the information entered as a part of the simulation setup.
+            This important information ranges from the material properties, boundary conditions,
+            additional source terms (e.g., momentum and power sources), etc. 
+            Essentially, the physics involved in the fluid simulation is given priority while sizing the mesh elements.
+            
+        Returns
+        -------
+        None. 
+        
+        '''      
+        # Start of mesh operation
+        
+        self.mesh_operation = self.mesh_operation_api.create_mesh_operation(
+            self.project_id,
+            sim_sdk.MeshOperation(
+                name= mesh_name,
+                geometry_id= self.geometry_id,
+                model= sim_sdk.SimmetrixMeshingFluid(
+                    physics_based_meshing= physics_based_meshing, hex_core = True, 
+                    sizing= sim_sdk.ManualMeshSizingSimmetrix(
+                		type="MANUAL",
+                		maximum_edge_length= sim_sdk.DimensionalLength(
+                			value= max_edge_len,
+                			unit="m",
+                		),
+                		minimum_edge_length= sim_sdk.DimensionalLength(
+                			value= min_edge_len,
+                			unit="m",
+                		),
+                	),
+                    refinements = self.mesh_refinement,
+                    automatic_layer_settings= self.automatic_layer_settings,
+                    advanced_simmetrix_settings = self.advanced_mesh_settings
+                 ),
+                ),
+            )
+        
+        self.mesh_operation_id = self.mesh_operation.mesh_operation_id
+        self.mesh_operation_api.update_mesh_operation( self.project_id, self.mesh_operation_id, self.mesh_operation)
+
+
+
+    def set_local_element_size_refinement(self, max_element_size ,name = '',  key_list_single = [], key_multi_entity = None,  single_entities = True):
         
         '''
         add a local element size mesh refinement
@@ -2381,6 +2520,11 @@ class ConjugateHeatTransfer():
             
             in this case, you are supplying a list of the keys that points 
             to the parts that are expected to be assigned a certain material 
+            
+        entities: boolean
+            
+            If the provided list of entities are all from single entities that was retrieved then leave as True. 
+            If you have multiple faces grouped together, then switch it to False 
               
         Returns
         -------
@@ -2388,10 +2532,13 @@ class ConjugateHeatTransfer():
         
         '''    
         #for later: add a method to add multiple entity selections automatically using get_entities
-        
-        faces_to_assign = []
-        for key in key_list: 
-            faces_to_assign.append(self.single_entity[key])
+        if single_entities: 
+            faces_to_assign = []
+            for key in key_list_single: 
+                faces_to_assign.append(self.single_entity[key])
+        else: 
+            faces_to_assign = self.multiple_entities[key_multi_entity]
+
         
         self.mesh_refinement.append(   
                         sim_sdk.SimmetrixLocalSizingRefinement(
@@ -2515,7 +2662,7 @@ class ConjugateHeatTransfer():
                                                                avg   =  mesh_estimation.duration.value.replace('PT','')))          
             print("*"*10)
             
-            if mesh_estimation.compute_resource is not None and mesh_estimation.compute_resource.value > 150.0:
+            if mesh_estimation.compute_resource is not None and mesh_estimation.compute_resource.value > 300:
                 raise Exception("Too expensive", mesh_estimation)
         
             if mesh_estimation.duration is not None:
@@ -2540,7 +2687,7 @@ class ConjugateHeatTransfer():
         Parameters
         ----------
         None. 
-        
+         
         Returns
         -------
         None. 
@@ -2592,6 +2739,55 @@ class ConjugateHeatTransfer():
             self.mesh_operation = self.mesh_operation_api.get_mesh_operation(self.project_id, self.mesh_operation_id)
             mesh_operation_start = time.time()
             while self.mesh_operation.status not in ("FINISHED", "CANCELED", "FAILED"):
+                if time.time() > mesh_operation_start + self.mesh_max_runtime * 4:
+                    raise TimeoutError()
+                time.sleep(30)
+                self.mesh_operation = self.mesh_operation_api.get_mesh_operation(self.project_id, self.mesh_operation_id)
+                print(f"Meshing run status: {self.mesh_operation.status} - {self.mesh_operation.progress}")
+            
+            self.mesh_operation = self.mesh_operation_api.get_mesh_operation(self.project_id, self.mesh_operation_id)
+            # print(f"final mesh_operation: {self.mesh_operation}"
+            
+            # Get the simulation spec and update it with mesh_id from the previous mesh operation
+            self.simulation_spec = self.simulation_api.get_simulation(self.project_id, self.simulation_id)
+            self.simulation_spec.mesh_id = self.mesh_operation.mesh_id
+            self.simulation_api.update_simulation(self.project_id, self.simulation_id, self.simulation_spec)
+
+
+
+    def update_existing_spec_with_new_mesh(self, run_state = False): 
+        
+        '''
+        submit the mesh operation to start and then add its id to an exisitng simulation spec
+        
+        Parameters
+        ----------
+        run_state: boolean 
+            
+            a boolean to decide on whether the mesh is put on queue or not 
+            
+            (if you are still reading this line, then please keep run_state False, 
+             I would still need to test this thorougly )
+        
+        Returns
+        -------
+        None. 
+        
+        '''    
+        #for later: Figure out how to run the mesh operations in parallel without having to wait for each one to finish
+        # The problem is related with retreiving the mesh id. It is possible that it is only attainable after the mesh operation is completed - investiagte...
+        
+        
+        if run_state :
+            self.mesh_operation_api.start_mesh_operation(self.project_id, self.mesh_operation_id, simulation_id= self.simulation_id)
+        
+        else: 
+            
+            self.mesh_operation_api.start_mesh_operation(self.project_id, self.mesh_operation_id, simulation_id= self.simulation_id)            
+            # Wait until the meshing operation is complete
+            self.mesh_operation = self.mesh_operation_api.get_mesh_operation(self.project_id, self.mesh_operation_id)
+            mesh_operation_start = time.time()
+            while self.mesh_operation.status not in ("FINISHED", "CANCELED", "FAILED"):
                 if time.time() > mesh_operation_start + self.mesh_max_runtime:
                     raise TimeoutError()
                 time.sleep(30)
@@ -2601,14 +2797,13 @@ class ConjugateHeatTransfer():
             self.mesh_operation = self.mesh_operation_api.get_mesh_operation(self.project_id, self.mesh_operation_id)
             # print(f"final mesh_operation: {self.mesh_operation}")
             
-            # Get the simulation spec and update it with mesh_id from the previous mesh operation
-            self.simulation_spec = self.simulation_api.get_simulation(self.project_id, self.simulation_id)
             self.simulation_spec.mesh_id = self.mesh_operation.mesh_id
             self.simulation_api.update_simulation(self.project_id, self.simulation_id, self.simulation_spec)
+       
 
     """Functions to estimate the simulation resources, create and run the simulation"""
     
-    def estimate_simulation(self, maximum_cpu_consumption_limit = 400):
+    def estimate_simulation(self, maximum_cpu_consumption_limit = 1000):
         
         '''
         Estimate how much time and computing resources a mesh operation is going to take 
@@ -2658,7 +2853,7 @@ class ConjugateHeatTransfer():
             else:
                 raise ae
         
-    def create_simulation(self, sim_name ):
+    def create_simulation_run(self, sim_name ):
         
         '''
         create a simulation and prepare it for submitting to run 
@@ -2800,7 +2995,7 @@ class ConjugateHeatTransfer():
             with open(write_to, "w") as file:
                 file.write(probe_point_plot_data_csv)
     
-    def get_surface_data_results(self, name, data_type = "average" , field = 'T', dir_name = "surface_data_results"): 
+    def get_surface_data_results(self, prefix ,rs_name, data_type = "average" , field = 'T', dir_name = "surface_data_results"): 
         
         '''
         get the results from a surface data result control item 
@@ -2834,10 +3029,10 @@ class ConjugateHeatTransfer():
         '''                    
                 
         if data_type == 'average': 
-            area_average_result = [r for r in self.simulation_results._embedded if (r.category == "AREA_AVERAGE" and r.name == name and r.quantity == field)][0]
+            area_average_result = [r for r in self.simulation_results._embedded if (r.category == "AREA_AVERAGE" and r.name == rs_name and r.quantity == field)][0]
         
         else: 
-            area_average_result = [r for r in self.simulation_results._embedded if (r.category == "AREA_INTEGRAL" and r.name == name and r.quantity == field)][0]
+            area_average_result = [r for r in self.simulation_results._embedded if (r.category == "AREA_INTEGRAL" and r.name == rs_name and r.quantity == field)][0]
    
         area_average_result_response = self.api_client.rest_client.GET(
             url= area_average_result.download.url, headers={self.api_key_header: self.api_key}, _preload_content=False
@@ -2851,13 +3046,13 @@ class ConjugateHeatTransfer():
             #check if the directory already exists if not create a new one and store in it 
             area_average_result_path.mkdir(parents = True, exist_ok = False)
             print("D")
-            write_to = area_average_result_path / "{n}_{f}.csv".format(n = name, f = field)
+            write_to = area_average_result_path / "{pf}_{n}_{f}.csv".format(pf = prefix ,n = rs_name, f = field)
             with open(write_to, "w") as file:
                 file.write(area_average_results_csv)
         except: 
             #write to the already existing directory 
             area_average_result_path.mkdir(parents = True, exist_ok = True)
-            write_to = area_average_result_path / "{n}_{f}.csv".format(n = name, f = field)
+            write_to = area_average_result_path / "{pf}_{n}_{f}.csv".format(pf = prefix ,n = rs_name, f = field)
             with open(write_to, "w") as file:
                 file.write(area_average_results_csv)
                 
@@ -3052,7 +3247,178 @@ class ConjugateHeatTransfer():
         self.run = found
         self.run_id = found["run_id"]
         self.run_id = found["run_id"]
+        
+        
+    def get_simulations_sdk(self):
+        
+        '''
+        Retreive the simulation specs of all simulations in a project
     
+        Parameters
+        ----------
+
+        Returns
+        -------
+        found : TYPE
+            DESCRIPTION.
+    
+        '''  
+        self.few_simulation_specs = self.simulation_api.get_simulations(self.project_id).embedded
+                    
+        return self.few_simulation_specs
+    
+    
+    def get_simulations_spec_and_return_id_of_sim_interest(self, sim_name=""):
+        '''
+        Retrieve the simulation specs of all simulations in a project
+        
+        Parameters
+        ----------
+        sim_name : str, optional
+            The name of the simulation to search for. Default is an empty string.
+        
+        Returns
+        -------
+        simulation_id : int or None
+            The simulation ID of the matching simulation, or None if not found.
+        
+        Raises
+        ------
+        ValueError
+            If no simulation is found with the given name.
+        '''  
+        self.few_simulation_specs = self.simulation_api.get_simulations(self.project_id).embedded
+           
+        sim_found = next((sim for sim in self.few_simulation_specs if sim.name == sim_name), None)
+        
+        if sim_found is None:
+            raise ValueError(f"No simulation found with name '{sim_name}'")
+        
+        return sim_found.simulation_id
+
+        
+    def get_simulation_spec(self):
+         
+         '''
+         Retreive the simulation spec of a specific simulation in a project
+     
+         Parameters
+         ----------
+
+         Returns
+         -------
+         found : TYPE
+             DESCRIPTION.
+     
+         '''  
+         
+         print("Project id = {}".format(self.project_id))
+         print("Simulation id = {}".format(self.simulation_id))
+         
+         self.simulation_spec = self.simulation_api.get_simulation(self.project_id, self.simulation_id)
+         
+         self.simulation_spec.version = "21.0"
+         
+         return self.simulation_spec
+         
+                
+    def get_simulation_spec_and_write_to_a_file(self, simulation_name):
+        
+        simulations = self.simulation_api.get_simulations(self.project_id).embedded
+        simulation_matches = [s for s in simulations if s.name == simulation_name]
+
+        if len(simulation_matches) == 0:
+            if simulation_name is not None:
+                print(f"simulation {simulation_name} not found")
+        else:
+            # Open file to write to
+            file_object = open("Spec_of_"+ simulation_name +".txt", 'a')
+            file_object.write(
+                f"model for simulation {simulation_name}\n{self.simulation_api.get_simulation_sdk_code(self.project_id, simulation_matches[0].simulation_id)}"
+            )
+            print(f"written simulation code to file: Spec_of_"+ simulation_name +".txt")
+
+    def get_mesh_operation_from_sim(self, mesh_name=""):
+        '''
+        Retrieve the mesh ID of a simulation's mesh operation in a project
+        
+        Parameters
+        ----------
+        mesh_name : str, optional
+            The name of the simulation to search for. Default is an empty string.
+        
+        Returns
+        -------
+        mesh_id : int or None
+            The mesh ID of the matching simulation's mesh operation, or None if not found.
+        
+        Raises
+        ------
+        ValueError
+            If no simulation is found with the given name.
+        '''  
+        self.few_mesh_ids = self.mesh_operation_api.get_mesh_operations(self.project_id).embedded
+        
+        mesh_found = next((mesh for mesh in self.few_mesh_ids if mesh.name == mesh_name), None)
+        
+        if mesh_found is None:
+            raise ValueError(f"No mesh found with name '{mesh_name}'")
+                
+        mesh_model = self.mesh_operation_api.get_mesh_operation_sdk_code(self.project_id, mesh_found.mesh_operation_id)
+        return mesh_found, mesh_model
+
+    
+    def get_mesh_ids_from_sim(self):
+        '''
+        Retrieve the mesh ID of a simulation's mesh operation in a project
+        
+        Parameters
+        ----------
+        mesh_name : str, optional
+            The name of the simulation to search for. Default is an empty string.
+        
+        Returns
+        -------
+        mesh_id : int or None
+            The mesh ID of the matching simulation's mesh operation, or None if not found.
+        
+        Raises
+        ------
+        ValueError
+            If no simulation is found with the given name.
+        '''  
+        self.few_mesh_ids = self.mesh_operation_api.get_mesh_operations(self.project_id).embedded
+
+        return self.few_mesh_ids
+
+
+    def map_assignments_from_new_geo_to_existing_spec(self, key_list = []):
+        
+        
+        
+        """materials"""
+        while True: 
+            i= 0 
+            #fluid
+            #assign entity 
+            self.simulation_spec.model.materials.fluids[i] \
+                .topological_reference.entities.append(self.single_entity)
+                
+            #remove useless set
+            self.simulation_spec.model.materials.fluids[i] \
+                .topological_reference.sets = []
+            
+            #solid
+            self.simulation_spec.model.materials.solids[i]
+            
+            i = i + 1 
+            
+            if i > len(self.simulation_spec.model.materials.fluids):
+                break
+        
+        
+        
+
     # def find_geometry(self, name):
     #     '''
     #     Take a Simulation Name, return a simulation
