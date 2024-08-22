@@ -114,8 +114,8 @@ cht.check_simulation_and_mesh_settings()
 
 #-----------------------------
 #Start Simulation
-cht.estimate_simulation(maximum_cpu_consumption_limit = 200)
-cht.create_simulation(sim_name = "Run 1")
+cht.estimate_simulation(maximum_cpu_consumption_limit = 300)
+cht.create_simulation_run(sim_name = "Run 1")
 cht.start_simulation_run(wait_for_results = False)
 
 
